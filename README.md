@@ -1,125 +1,116 @@
-Model Downloader
-A robust and universal model downloader extension for AUTOMATIC1111's Stable Diffusion WebUI (compatible with Forge and other popular forks).
-It allows you to download models (checkpoints, LoRAs, VAEs, embeddings, ADetailer models, etc.) directly from any direct HTTP/HTTPS link, with full support for CivitAI metadata extraction and optional aria2 multi‑threaded acceleration.
+## Model Downloader for Stable Diffusion WebUI
 
-✨ Features
-Universal HTTP/HTTPS support – Download from any direct link, not only CivitAI. Works with Hugging Face, private servers, and local network shares.
+A robust, multi-purpose model downloader extension for [AUTOMATIC1111/stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) and its forks.  
+Download models directly from any HTTP/HTTPS link – Civitai, Hugging Face, self-hosted servers, or even local network shares.
 
-Two download engines
+> **Why this fork?**  
+> The original extension had several bugs that prevented normal use and lacked proper generic HTTP download support.  
+> This version fixes critical issues, adds ADetailer model support, and makes the extension usable for **any URL**, not just Civitai.
 
-requests (built‑in) – simple, dependency‑free, with progress feedback.
+---
 
-aria2 – high‑speed multi‑threaded download with resume capability (optional).
+### ✨ Features
 
-Automatic model directory detection – Saves to the correct folder based on content type (checkpoints, LoRA, VAE, embeddings, hypernetworks, LyCORIS, ControlNet, and ADetailer).
+- **Universal HTTP/HTTPS downloads** – Works with any direct download link. No special site integration required.
+- **Smart filename extraction** – Automatically guesses the filename from the URL.  
+  For Civitai links, it even fetches the real model name via API.
+- **Two download engines**
+  - `requests` (default) – Built-in Python library, no extra dependencies. Streams large files safely to disk.
+  - `aria2` (optional) – Multi-threaded download with resume capability.
+- **Full model type roster**
+  - Checkpoint / Main model
+  - Hypernetwork
+  - Textual Inversion / Embedding
+  - VAE
+  - LoRA
+  - LyCORIS (LoCon/LoHA)
+  - ControlNet Model
+  - **ADetailer** – `models\adetailer` path support
+- **Automatic directory creation** – No more missing folder errors.
+- **Preview image download** – Fetches preview from Civitai when available.
+- **Custom save path & filename** – Override the default location and rename the file on the fly.
+- **Create new folder** – Optionally saves each model inside its own subfolder.
+- **Additional Networks integration** – If you have the *Additional Networks* extension, a checkbox lets you save LoRA/LyCORIS models directly into its folder.
+- **Clean, responsive Gradio UI** – Built into the WebUI's tab system.
 
-CivitAI integration – Automatically extracts real file names and preview images from CivitAI model links.
+---
 
-Customisable – Change filename, choose a custom download path, create a new subfolder, and optionally save LoRAs directly to the Additional Networks directory.
+### 📦 Installation
 
-Robust & secure – No command injection, proper path handling, clean error reporting. Fixes all known bugs from the original Model Downloader.
+1. Open your Stable Diffusion WebUI folder.
+2. Go to `extensions`.
+3. Clone this repository:
+   ```bash
+   git clone https://github.com/your-username/sd-model-downloader.git
+   ```
+   *(Replace `your-username` with the actual repo)*
+4. Restart the WebUI.  
+   The **Model Downloader** tab will appear.
 
-Cross‑platform – install.py attempts to install aria2 automatically on Linux (pacman/apt) and macOS (Homebrew); Windows users get a clear notification.
+**Optional: install aria2** (for faster multi-threaded downloads)  
+- **Windows**: Download from [aria2 releases](https://github.com/aria2/aria2/releases) and add `aria2c.exe` to your `PATH`.  
+- **Linux (Debian/Ubuntu)**: `sudo apt install aria2`  
+- **Linux (Arch/Manjaro)**: `sudo pacman -S aria2`  
+- **macOS**: `brew install aria2`  
 
-📥 Installation
-Open your Stable Diffusion WebUI folder.
+The extension also ships with an `install.py` that will attempt to install `aria2` automatically on Linux/macOS.  
+*Note: aria2 is completely optional. The `requests` downloader works out-of-the-box.*
 
-Navigate to extensions/ (or extensions inside your data folder, depending on your setup).
+---
 
-Clone this repository:
+### 🚀 How to Use
 
-bash
-git clone https://github.com/your-repo/sd-model-downloader.git
-(Replace with the actual repo URL.)
+1. Open the **Model Downloader** tab in the WebUI.
+2. **Select a model type** – This sets the default save folder (e.g., `models/Stable-diffusion` for Checkpoints, `models/Lora` for LoRA, `models/adetailer` for ADetailer).
+3. **Paste your download URL** – Any direct HTTP/HTTPS link.
+4. Watch the preview and filename appear automatically.
+5. (Optional) Tweak settings:
+   - *Change Filename* – rename the file before downloading
+   - *Custom Download Path* – override the default folder
+   - *Download Preview* – save preview image if available
+   - *Create New Folder* – wrap the file in a named folder
+6. Click **Start Download** (or press Enter).
 
-Restart the WebUI.
-The Model Downloader tab will appear in the UI.
+---
 
-On first launch, install.py will check for aria2c and attempt to install it if you are on Linux or macOS. On Windows you can manually install aria2 and add it to your PATH, or simply use the default requests downloader which requires no extra dependencies.
+### 🔧 Command-line Arguments
 
-🚀 Usage
-Open the Model Downloader tab.
+You can override default model directories by launching `webui-user.bat`/`.sh` with:
 
-Choose a Downloader Type (requests is recommended for most users).
+```
+--ckpt-dir            path/to/Stable-diffusion
+--vae-dir             path/to/VAE
+--embeddings-dir      path/to/embeddings
+--hypernetwork-dir    path/to/hypernetworks
+--lora-dir            path/to/Lora
+--lyco-dir            path/to/LyCORIS
+--adetailer-dir       path/to/adetailer
+```
 
-Select the Content Type that matches the model you want to download.
-(e.g., Checkpoint for .safetensors/.ckpt, ADetailer for .pt face detection models.)
+---
 
-Paste or type the direct download URL into the text box.
+### 🐛 Bugs Fixed in This Version
 
-For CivitAI links, the filename and preview image will be automatically retrieved.
+- **Broken extension path** – The extension now correctly detects folder existence (old code had a leading slash that broke `os.path.join`).
+- **Variable name typo** – Crashed the UI when “Custom Download Path” was enabled.
+- **Button state lock** – Download button now properly resets after completion.
+- **Command injection risk** – All `aria2c` calls use safe parameter lists.
+- **Memory‑safe downloads** – Large model files are streamed in chunks, never loaded entirely into RAM.
+- **Generic URL handling** – The original version failed on many non‑Civitai URLs; now it works for **any** direct link.
 
-For any other link, the filename will be guessed from the URL and a placeholder preview will be shown.
+---
 
-Review the Model Information panel – it shows the save folder and the detected filename.
+### 🤝 Credits
 
-(Optional) Enable advanced options:
+This project began as a rewrite of [Iyashinouta/sd-model-downloader](https://github.com/Iyashinouta/sd-model-downloader).  
+Many thanks to the original author for the initial idea.
 
-Change Filename – enter a custom file name (without extension).
+---
 
-Custom Download Path – override the auto‑detected folder.
+### 💬 Personal Note
 
-Create New Folder – create a subfolder with the filename.
+*This extension was rebuilt out of a sheer personal itch – I wanted a simple, reliable button to download models from any link without workarounds. It is driven purely by personal interest and the joy of coding. I hope you find it useful too!*
 
-Download Preview – also download the preview image (from CivitAI).
+---
 
-Turn on log – (aria2 only) shows detailed aria2 output.
-
-Click Start Download (or press Enter). Progress and result messages appear in the Download Result box.
-
-⚙️ Command‑Line Arguments
-You can override the default download folders by adding these arguments to your WebUI launch command (webui-user.bat / webui.sh):
-
-Argument	Default Location	Description
---ckpt-dir	models/Stable-diffusion	Checkpoint files
---vae-dir	models/VAE	VAE files
---embeddings-dir	embeddings	Textual Inversion embeddings
---hypernetwork-dir	models/hypernetworks	Hypernetwork files
---lora-dir	models/Lora	LoRA files
---lyco-dir	models/Lora	LyCORIS files
---adetailer-dir	models/adetailer	ADetailer model files
-Example:
-
-bash
-python launch.py --adetailer-dir D:/my_models/adetailer
-📂 Supported Content Types
-Checkpoint – main model files (.safetensors, .ckpt)
-
-Hypernetwork
-
-TextualInversion/Embedding
-
-VAE
-
-LoRA
-
-LyCORIS (LoCon/LoHA)
-
-ControlNet Model
-
-ADetailer – face/person/hand detection models for the ADetailer extension
-
-⚠️ Troubleshooting
-Problem	Solution
-File already exists error	Delete or rename the existing file, or change the target filename.
-aria2c not found	Switch to requests downloader, or install aria2 manually.
-CivitAI filename/ preview not loading	The link might not be a direct CivitAI download. Paste the direct .safetensors URL instead, or use the Download button link from CivitAI.
-Permission denied when saving	Run the WebUI with appropriate folder permissions, or choose a custom download path inside your user folder.
-Download stops with no error	Large files with requests may appear stuck – be patient, the file is being written. You can also try aria2 for larger files.
-🔧 Compatibility
-AUTOMATIC1111 WebUI 1.x and later
-
-Forge (tested)
-
-SD.Next (should work, not extensively tested)
-
-The extension detects the sd-webui-additional-networks extension and shows an extra checkbox to save LoRA models directly into its directory.
-
-🙏 Credits
-This is a complete rewrite of the original sd-model-downloader, fixing multiple bugs and adding universal HTTP support, ADetailer integration, and security hardening.
-
-📜 License
-(Add your license here. e.g., MIT, Apache 2.0)
-
-Feel free to open issues or pull requests on the repository.
-
+**Feel free to open issues or pull requests. Happy generating!**

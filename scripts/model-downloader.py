@@ -18,20 +18,20 @@ except ImportError:
 sd_path = os.getcwd()
 md_path = scripts.basedir()
 
-# 修正：去掉 ext 前的斜杠，避免 os.path.join 错误
+# 修正：ext 使用纯目录名，防止 os.path.join 被绝对路径截断
 ext_dir_name = 'extensions'
 no_prev = None
 addnet_path = None
 
-# 命令行参数（支持自定义各模型目录）
+# 命令行参数（支持自定义各模型目录，新增 --adetailer-dir）
 parser = argparse.ArgumentParser()
 parser.add_argument('--ckpt-dir', type=str, default=os.path.join(models_path, 'Stable-diffusion'))
 parser.add_argument('--vae-dir', type=str, default=os.path.join(models_path, 'VAE'))
 parser.add_argument('--embeddings-dir', type=str, default=os.path.join(data_path, 'embeddings'))
 parser.add_argument('--hypernetwork-dir', type=str, default=os.path.join(models_path, 'hypernetworks'))
 parser.add_argument('--lora-dir', type=str, default=os.path.join(models_path, 'Lora'))
-# 1.5.0 后 LyCORIS 已并入原生 Lora，默认同目录
 parser.add_argument('--lyco-dir', type=str, default=os.path.join(models_path, 'Lora'))
+parser.add_argument('--adetailer-dir', type=str, default=os.path.join(models_path, 'adetailer'))
 args, _ = parser.parse_known_args()
 
 # 预览占位图路径
@@ -39,7 +39,8 @@ no_preview_default = os.path.join(sd_path, 'html', 'card-no-preview.png')
 if os.path.exists(no_preview_default):
     no_prev = no_preview_default
 else:
-    no_prev = os.path.join(md_path, 'images', 'card-no-prev.png') if os.path.exists(os.path.join(md_path, 'images', 'card-no-prev.png')) else None
+    alt_prev = os.path.join(md_path, 'images', 'card-no-prev.png')
+    no_prev = alt_prev if os.path.exists(alt_prev) else None
 
 # 检测 Additional Networks 扩展（修正后的路径拼接）
 possible_addnet = os.path.join(sd_path, ext_dir_name, 'sd-webui-additional-networks')
@@ -57,12 +58,15 @@ lora_path = args.lora_dir
 lycoris_path = args.lyco_dir
 controlnet_path = os.path.join(extensions_dir, 'sd-webui-controlnet')
 controlnet_model_path = os.path.join(controlnet_path, 'models')
+# 新增 ADetailer 路径
+adetailer_path = args.adetailer_dir
 
 # 确保所有目录存在
-for p in [checkpoint_path, hypernetwork_path, embedding_path, vae_path, lora_path, lycoris_path]:
+for p in [checkpoint_path, hypernetwork_path, embedding_path, vae_path,
+          lora_path, lycoris_path, adetailer_path]:
     os.makedirs(p, exist_ok=True)
 
-print(f'Model Downloader v2.0.0 (Refactored)')
+print('Model Downloader v2.0 (Refactored + ADetailer)')
 print('All directories checked.')
 
 # ---------- 工具函数 ----------
@@ -76,6 +80,7 @@ def get_download_path(content_type):
         'LoRA': lora_path,
         'LyCORIS(LoCon/LoHA)': lycoris_path,
         'ControlNet Model': controlnet_model_path,
+        'ADetailer': adetailer_path,          # 新增
     }
     return mapping.get(content_type, 'Unset, Please Choose your Content Type')
 
@@ -86,18 +91,16 @@ def extract_filename_info(url):
     返回 (basename, extension)
     """
     if 'civitai.com' in url and '/download/' in url:
-        # Civitai 下载链接转 API
         api_url = url.replace('/download/models/', '/api/v1/model-versions/')
         try:
             resp = requests.get(api_url, timeout=10)
             resp.raise_for_status()
             data = resp.json()
-            # 优先取第一个文件的名称
             file_name = data.get('files', [{}])[0].get('name', 'model')
             basename, ext = os.path.splitext(file_name.replace(' ', '_'))
             return basename, ext if ext else '.safetensors'
         except Exception:
-            pass  # 失败时回退到普通解析
+            pass
     # 普通 URL 解析
     parsed = urlparse(url)
     path = parsed.path
@@ -130,18 +133,15 @@ def model_info_markdown(url, download_path, filename, extension):
     <b>File Name :</b> {filename}{extension}<br>
     """
 
-# ---------- 下载器 ----------
+# ---------- 通用下载器 ----------
 def download_with_requests(url, save_dir, filename, extension, preview_url=None):
     """
     通用 HTTP 流式下载（生成器），支持进度回馈。
-    yield 消息字符串。
     """
     file_path = os.path.join(save_dir, f'{filename}{extension}')
     os.makedirs(save_dir, exist_ok=True)
 
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    }
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
         resp = requests.get(url, headers=headers, stream=True, allow_redirects=True, timeout=30)
         resp.raise_for_status()
@@ -168,7 +168,6 @@ def download_with_requests(url, save_dir, filename, extension, preview_url=None)
         yield f"ERROR: Download interrupted - {e}"
         return
 
-    # 下载预览图（如果提供）
     if preview_url:
         try:
             img_resp = requests.get(preview_url, headers=headers, allow_redirects=True)
@@ -183,19 +182,16 @@ def download_with_requests(url, save_dir, filename, extension, preview_url=None)
 
 def download_with_aria2(url, save_dir, filename, extension, preview_url=None, logging=False):
     """
-    使用 aria2c 多线程下载。为安全起见，使用列表传递参数。
-    生成器 yield 输出信息。
+    使用 aria2c 多线程下载（安全参数列表）。
     """
     file_path = os.path.join(save_dir, f'{filename}{extension}')
     os.makedirs(save_dir, exist_ok=True)
 
-    # 构建安全参数列表
     cmd = ['aria2c', '-c', '-x', '16', '-s', '16', '-k', '1M',
            '-d', save_dir, '-o', f'{filename}{extension}', url]
     if not logging:
         cmd.insert(1, '--console-log-level=error')
 
-    # 如果有预览图，下载完模型后用额外命令获取（简化处理）
     try:
         if logging:
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -213,7 +209,6 @@ def download_with_aria2(url, save_dir, filename, extension, preview_url=None, lo
         yield "ERROR: aria2c not found. Please install it or use 'requests' downloader."
         return
 
-    # 下载预览图
     if preview_url:
         try:
             img_resp = requests.get(preview_url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -224,7 +219,7 @@ def download_with_aria2(url, save_dir, filename, extension, preview_url=None, lo
         except Exception as e:
             yield f"WARNING: Preview download failed - {e}"
 
-# ---------- Gradio UI 回调 ----------
+# ---------- Gradio 回调 ----------
 def on_content_type_change(content_type):
     return gr.update(value=get_download_path(content_type))
 
@@ -235,13 +230,12 @@ def on_toggle_custom_path(change):
     return gr.update(visible=change)
 
 def on_url_change(url, download_path):
-    """当URL输入变化时，更新文件名、预览图、按钮状态"""
     if not url:
         return (
-            gr.update(),  # filename
-            gr.update(value=no_prev),  # image
+            gr.update(),                          # filename
+            gr.update(value=no_prev),             # image
             gr.update(visible=False, variant='secondary'),  # download_btn
-            gr.update(visible=False),  # out_text
+            gr.update(visible=False),             # out_text
             gr.update(value="<center><b>Model Information</b></center>")  # info
         )
     try:
@@ -266,9 +260,6 @@ def on_url_change(url, download_path):
         )
 
 def start_download(downloader_type, url, download_path, filename, addnet, logging, new_folder, preview):
-    """
-    下载生成器，yield 更新输出文本框的内容。
-    """
     if not url:
         yield "ERROR: No URL provided."
         return
@@ -285,26 +276,22 @@ def start_download(downloader_type, url, download_path, filename, addnet, loggin
         if new_folder:
             target_dir = os.path.join(target_dir, filename)
 
-    # 获取文件名和扩展名（优先使用用户自定义文件名）
     if filename:
         basename = filename
     else:
         basename, _ = extract_filename_info(url)
 
-    _, ext = extract_filename_info(url)  # 保留原扩展名
+    _, ext = extract_filename_info(url)
 
-    # 检查文件是否已存在
     full_path = os.path.join(target_dir, f'{basename}{ext}')
     if os.path.exists(full_path):
         yield f"ERROR: File already exists in {target_dir}"
         return
 
-    # 获取预览图 URL
     preview_url = None
     if preview:
         preview_url = get_preview_url(url)
 
-    # 选择下载器
     if downloader_type == 'requests':
         for msg in download_with_requests(url, target_dir, basename, ext, preview_url):
             yield msg
@@ -317,7 +304,7 @@ def start_download(downloader_type, url, download_path, filename, addnet, loggin
 # ---------- 界面搭建 ----------
 def on_ui_tabs():
     with gr.Blocks() as downloader:
-        gr.Markdown("## Model Downloader v2.0")
+        gr.Markdown("## Model Downloader v2.0 (with ADetailer support)")
 
         with gr.Row():
             downloader_type = gr.Radio(
@@ -336,12 +323,12 @@ def on_ui_tabs():
                     'VAE',
                     'LoRA',
                     'LyCORIS(LoCon/LoHA)',
-                    'ControlNet Model'
+                    'ControlNet Model',
+                    'ADetailer'               # 新增
                 ],
                 value='Checkpoint'
             )
 
-        # 根据扩展存在与否显示 addnet 选项
         addnet_checkbox = gr.Checkbox(
             label='Save to Additional Networks',
             value=False,
@@ -390,7 +377,6 @@ def on_ui_tabs():
             outputs=[filename_input, preview_img, download_btn, out_text, info_md]
         )
 
-        # 下载按钮（生成器输出）
         download_btn.click(
             start_download,
             inputs=[downloader_type, url_input, download_path, filename_input,
@@ -398,7 +384,6 @@ def on_ui_tabs():
             outputs=out_text
         )
 
-        # 回车提交（复用同一个函数）
         url_input.submit(
             start_download,
             inputs=[downloader_type, url_input, download_path, filename_input,
@@ -406,7 +391,6 @@ def on_ui_tabs():
             outputs=out_text
         )
 
-        # 底部链接
         gr.Markdown(
             "<center><font size=2>Having Issue? | "
             "<a href='https://github.com/Iyashinouta/sd-model-downloader/issues'>Report Here</a></font></center>"
@@ -414,5 +398,4 @@ def on_ui_tabs():
 
     return (downloader, 'Model Downloader', 'downloader'),
 
-# 注册扩展标签页
 script_callbacks.on_ui_tabs(on_ui_tabs)
