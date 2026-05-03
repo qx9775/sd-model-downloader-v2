@@ -3,7 +3,6 @@ import requests
 import argparse
 import subprocess
 import gradio as gr
-import shlex
 from urllib.parse import urlparse
 from modules import scripts, script_callbacks
 
@@ -18,12 +17,10 @@ except ImportError:
 sd_path = os.getcwd()
 md_path = scripts.basedir()
 
-# 修正：ext 使用纯目录名，防止 os.path.join 被绝对路径截断
 ext_dir_name = 'extensions'
 no_prev = None
 addnet_path = None
 
-# 命令行参数（支持自定义各模型目录，新增 --adetailer-dir）
 parser = argparse.ArgumentParser()
 parser.add_argument('--ckpt-dir', type=str, default=os.path.join(models_path, 'Stable-diffusion'))
 parser.add_argument('--vae-dir', type=str, default=os.path.join(models_path, 'VAE'))
@@ -34,7 +31,6 @@ parser.add_argument('--lyco-dir', type=str, default=os.path.join(models_path, 'L
 parser.add_argument('--adetailer-dir', type=str, default=os.path.join(models_path, 'adetailer'))
 args, _ = parser.parse_known_args()
 
-# 预览占位图路径
 no_preview_default = os.path.join(sd_path, 'html', 'card-no-preview.png')
 if os.path.exists(no_preview_default):
     no_prev = no_preview_default
@@ -42,14 +38,12 @@ else:
     alt_prev = os.path.join(md_path, 'images', 'card-no-prev.png')
     no_prev = alt_prev if os.path.exists(alt_prev) else None
 
-# 检测 Additional Networks 扩展（修正后的路径拼接）
 possible_addnet = os.path.join(sd_path, ext_dir_name, 'sd-webui-additional-networks')
 if os.path.exists(possible_addnet):
     addnet_path = possible_addnet
 else:
     addnet_path = os.path.join(extensions_dir, 'sd-webui-additional-networks')
 
-# 各类型模型存放路径
 checkpoint_path = args.ckpt_dir
 vae_path = args.vae_dir
 embedding_path = args.embeddings_dir
@@ -58,20 +52,17 @@ lora_path = args.lora_dir
 lycoris_path = args.lyco_dir
 controlnet_path = os.path.join(extensions_dir, 'sd-webui-controlnet')
 controlnet_model_path = os.path.join(controlnet_path, 'models')
-# 新增 ADetailer 路径
 adetailer_path = args.adetailer_dir
 
-# 确保所有目录存在
 for p in [checkpoint_path, hypernetwork_path, embedding_path, vae_path,
           lora_path, lycoris_path, adetailer_path]:
     os.makedirs(p, exist_ok=True)
 
-print('Model Downloader v2.0 (Refactored + ADetailer)')
+print('Model Downloader v3.0 (Overwrite + Speed Boost)')
 print('All directories checked.')
 
 # ---------- 工具函数 ----------
 def get_download_path(content_type):
-    """根据内容类型返回保存路径"""
     mapping = {
         'Checkpoint': checkpoint_path,
         'Hypernetwork': hypernetwork_path,
@@ -80,16 +71,11 @@ def get_download_path(content_type):
         'LoRA': lora_path,
         'LyCORIS(LoCon/LoHA)': lycoris_path,
         'ControlNet Model': controlnet_model_path,
-        'ADetailer': adetailer_path,          # 新增
+        'ADetailer': adetailer_path,
     }
     return mapping.get(content_type, 'Unset, Please Choose your Content Type')
 
 def extract_filename_info(url):
-    """
-    从URL提取文件名和扩展名。
-    支持 Civitai API 解析和普通 HTTP 链接。
-    返回 (basename, extension)
-    """
     if 'civitai.com' in url and '/download/' in url:
         api_url = url.replace('/download/models/', '/api/v1/model-versions/')
         try:
@@ -101,7 +87,6 @@ def extract_filename_info(url):
             return basename, ext if ext else '.safetensors'
         except Exception:
             pass
-    # 普通 URL 解析
     parsed = urlparse(url)
     path = parsed.path
     raw_name = path[path.rfind('/') + 1:] if '/' in path else path
@@ -110,7 +95,6 @@ def extract_filename_info(url):
     return basename, ext if ext else '.bin'
 
 def get_preview_url(url):
-    """从 Civitai API 获取预览图 URL，其他链接返回 None"""
     if 'civitai.com' in url and '/download/' in url:
         api_url = url.replace('/download/models/', '/api/v1/model-versions/')
         try:
@@ -133,13 +117,23 @@ def model_info_markdown(url, download_path, filename, extension):
     <b>File Name :</b> {filename}{extension}<br>
     """
 
-# ---------- 通用下载器 ----------
+# ---------- 下载器（增强速率+自动覆盖） ----------
 def download_with_requests(url, save_dir, filename, extension, preview_url=None):
     """
-    通用 HTTP 流式下载（生成器），支持进度回馈。
+    流式下载，块大小 256KB，提升速度。
+    自动覆盖已存在的同名文件。
     """
     file_path = os.path.join(save_dir, f'{filename}{extension}')
     os.makedirs(save_dir, exist_ok=True)
+
+    # 删除旧文件（如果存在）
+    if os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+            yield f"INFO: Existing file removed → {file_path}"
+        except Exception as e:
+            yield f"ERROR: Cannot delete existing file - {e}"
+            return
 
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
@@ -155,7 +149,8 @@ def download_with_requests(url, save_dir, filename, extension, preview_url=None)
 
     try:
         with open(file_path, 'wb') as f:
-            for chunk in resp.iter_content(chunk_size=8192):
+            # 关键提速点：chunk_size 从 8192 提高到 256KB
+            for chunk in resp.iter_content(chunk_size=256 * 1024):
                 if chunk:
                     f.write(chunk)
                     downloaded += len(chunk)
@@ -181,11 +176,16 @@ def download_with_requests(url, save_dir, filename, extension, preview_url=None)
     yield f"SUCCESS: Download Completed.\nSaved to: {file_path}"
 
 def download_with_aria2(url, save_dir, filename, extension, preview_url=None, logging=False):
-    """
-    使用 aria2c 多线程下载（安全参数列表）。
-    """
     file_path = os.path.join(save_dir, f'{filename}{extension}')
     os.makedirs(save_dir, exist_ok=True)
+
+    # 删除旧文件
+    if os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+        except Exception as e:
+            yield f"ERROR: Cannot delete existing file - {e}"
+            return
 
     cmd = ['aria2c', '-c', '-x', '16', '-s', '16', '-k', '1M',
            '-d', save_dir, '-o', f'{filename}{extension}', url]
@@ -232,11 +232,11 @@ def on_toggle_custom_path(change):
 def on_url_change(url, download_path):
     if not url:
         return (
-            gr.update(),                          # filename
-            gr.update(value=no_prev),             # image
-            gr.update(visible=False, variant='secondary'),  # download_btn
-            gr.update(visible=False),             # out_text
-            gr.update(value="<center><b>Model Information</b></center>")  # info
+            gr.update(),
+            gr.update(value=no_prev),
+            gr.update(visible=False, variant='secondary'),
+            gr.update(visible=False),
+            gr.update(value="<center><b>Model Information</b></center>")
         )
     try:
         basename, ext = extract_filename_info(url)
@@ -264,13 +264,10 @@ def start_download(downloader_type, url, download_path, filename, addnet, loggin
         yield "ERROR: No URL provided."
         return
 
-    # 确定最终保存目录
+    target_dir = download_path
     if new_folder:
         target_dir = os.path.join(download_path, filename)
-    else:
-        target_dir = download_path
 
-    # 如果启用了 addnet 且路径存在，则保存到 addnet 的 lora 子目录
     if addnet and os.path.exists(addnet_path):
         target_dir = os.path.join(addnet_path, 'models', 'lora')
         if new_folder:
@@ -283,11 +280,7 @@ def start_download(downloader_type, url, download_path, filename, addnet, loggin
 
     _, ext = extract_filename_info(url)
 
-    full_path = os.path.join(target_dir, f'{basename}{ext}')
-    if os.path.exists(full_path):
-        yield f"ERROR: File already exists in {target_dir}"
-        return
-
+    # 不再检测文件存在，直接交给下载器处理（里面会删除）
     preview_url = None
     if preview:
         preview_url = get_preview_url(url)
@@ -301,10 +294,10 @@ def start_download(downloader_type, url, download_path, filename, addnet, loggin
     else:
         yield "ERROR: Unknown downloader type."
 
-# ---------- 界面搭建 ----------
+# ---------- UI ----------
 def on_ui_tabs():
     with gr.Blocks() as downloader:
-        gr.Markdown("## Model Downloader v2.0 (with ADetailer support)")
+        gr.Markdown("## Model Downloader v3.0 (Auto-overwrite & Speed Boost)")
 
         with gr.Row():
             downloader_type = gr.Radio(
@@ -324,7 +317,7 @@ def on_ui_tabs():
                     'LoRA',
                     'LyCORIS(LoCon/LoHA)',
                     'ControlNet Model',
-                    'ADetailer'               # 新增
+                    'ADetailer'
                 ],
                 value='Checkpoint'
             )
@@ -366,7 +359,6 @@ def on_ui_tabs():
                 info_md = gr.Markdown("<center><b>Model Information</b></center>")
                 preview_img = gr.Image(value=no_prev, show_label=False, width=156, height=234)
 
-        # 事件绑定
         content_type.change(on_content_type_change, content_type, download_path)
         change_name_check.change(on_toggle_change_name, change_name_check, filename_input)
         custom_path_check.change(on_toggle_custom_path, custom_path_check, download_path)
